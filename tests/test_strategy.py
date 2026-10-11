@@ -203,3 +203,33 @@ def test_hard_stop_disabled_by_default():
     s = make()
     fill_all_buys(s)
     assert s.check_risk(Market(yes_bid=0.05, yes_ask=0.06), 0) is None
+
+
+def test_nearest_side_entry_switches_while_flat_with_hysteresis():
+    s = Strategy(Config(budget_usd=100, nearest_side_entry=True))
+    s.check_risk(Market(0.39, 0.40), 0)
+    assert s.st.side == YES
+    s.check_risk(Market(0.41, 0.42), 1)
+    assert s.st.side == NO
+    assert [i.price for i in s.desired_orders() if i.side == "BUY"] == [0.58, 0.57, 0.56, 0.55]
+    s.check_risk(Market(0.39, 0.40), 2)  # mid 0.395 is inside the gap: stays NO
+    assert s.st.side == NO
+    s.check_risk(Market(0.38, 0.39), 3)
+    assert s.st.side == YES
+
+
+def test_nearest_side_entry_locks_once_something_is_bought():
+    s = Strategy(Config(budget_usd=100, nearest_side_entry=True))
+    first = next(i for i in s.desired_orders() if i.key == "YES:buy:0")
+    s.on_fill(first.key, first.size, first.price)
+    s.check_risk(Market(0.45, 0.46), 0)
+    assert s.st.side == YES and s.st.shares == pytest.approx(first.size)
+
+
+def test_late_fill_of_cancelled_side_becomes_the_position():
+    s = Strategy(Config(budget_usd=100, nearest_side_entry=True))
+    s.check_risk(Market(0.42, 0.43), 0)
+    assert s.st.side == NO
+    s.on_external_fill(YES, "buy", 26.31, 0.38)
+    assert s.st.side == YES and s.st.shares == pytest.approx(26.31)
+    assert s.st.cash == pytest.approx(100 - 26.31 * 0.38)

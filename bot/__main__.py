@@ -34,6 +34,9 @@ def load_config(path: Path) -> tuple:
         stop_wait_seconds=int(s.get("stop_wait_hours", 3) * 3600),
         hard_stop_yes_below=float(s.get("hard_stop_yes_below") or 0.0),
         hard_stop_yes_above=float(s.get("hard_stop_yes_above") or 1.0),
+        nearest_side_entry=bool(s.get("nearest_side_entry", False)),
+        entry_no_at_or_above=float(s.get("entry_no_at_or_above", 0.41)),
+        entry_yes_at_or_below=float(s.get("entry_yes_at_or_below", 0.39)),
         resume_yes_at_or_above=float(s.get("resume_yes_at_or_above", 0.36)),
         resume_no_at_or_below=float(s.get("resume_no_at_or_below", 0.44)),
         stop_trading_at=(
@@ -74,6 +77,10 @@ def main() -> None:
                    help='trade real money; also requires "trading_mode": "live" in the config')
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # The SDK's HTTP client logs every request at INFO; with order status polled every few seconds
+    # that drowns the bot's own lines. Its warnings and errors still show.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     workdir = Path(args.workdir)
     load_dotenv(workdir / ".env")
     raw, cfg = load_config(Path(args.config))

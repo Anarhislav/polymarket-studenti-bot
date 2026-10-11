@@ -14,6 +14,11 @@ All levels are YES prices.
 | NO | when YES reaches 42% (10%), 43% (15%), 44% (25%), 45% (50%) | 25% each when YES falls to 38, 37, 36, 35% |
 
 - Once the whole position is sold, the bot switches to the opposite phase with all its cash.
+- **Nearest-side entry** (`nearest_side_entry`, on in `config.json`): while the bot holds nothing
+  in the current phase, it arms the ladder on the side the price is closer to. At YES ≥ 41% it
+  cancels the YES buy ladder and places the NO buy ladder; at YES ≤ 39% it switches back. The gap
+  keeps it from re-placing orders while the price hovers around 40%. Once anything is bought,
+  the side is locked.
 - **The stop-loss is currently disabled** (`stop_yes_below: 0`, `stop_yes_above: 1` in `config.json`).
   When enabled: if the best YES bid stays below 31% (while holding YES), or the best YES ask stays
   above 49% (while holding NO), **for 3 hours without interruption**, the bot sells the whole
@@ -107,8 +112,14 @@ Deposit Wallet (accounts created on polymarket.com after 4 May 2026, including M
 
 1. Fill in `.env` (see `.env.example`): `SIGNER_PRIVATE_KEY` (the key of the account that owns
    the wallet, ideally a MetaMask account used only for the bot) and `POLYMARKET_WALLET_ADDRESS`
-   (the account wallet address from the profile menu). The Relayer API key is optional.
-2. Make sure the wallet has traded once on polymarket.com, so its trading approvals are set.
+   (the account wallet address from the profile menu).
+2. Make sure the wallet has traded once on polymarket.com, so its trading approvals are set,
+   then run the read-only check (it places no orders and never prints secrets):
+
+   ```bash
+   .venv/bin/python -m bot.check --config config.json --workdir .
+   ```
+
 3. Set `"trading_mode": "live"` in `config.json` and start with `--live`:
 
    ```bash

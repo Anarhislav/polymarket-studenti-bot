@@ -25,6 +25,13 @@ log = logging.getLogger(__name__)
 TOKEN_DECIMALS = 6
 OPEN_STATUSES = {"LIVE", "DELAYED", "UNMATCHED"}
 
+# The contracts that trade this neg-risk market. The SDK's full approval check also covers venues
+# this bot never uses (which polymarket.com does not approve either), so only these must be set.
+MARKET_SPENDERS = {
+    "0xe2222d279d744050d28e00520010520000310f59",  # NegRisk CTF exchange V2
+    "0xd91e80cf2e7be2e162c6513ced06f1dd0da35296",  # NegRisk adapter
+}
+
 
 class LiveSetupError(RuntimeError):
     """The account is not ready for live trading; the message says what to fix."""
@@ -44,18 +51,27 @@ def _units(raw: int) -> float:
     return raw / 10 ** TOKEN_DECIMALS
 
 
+def split_missing_approvals(missing) -> tuple:
+    """Split the SDK's missing approvals into (blocking this market, not used by it)."""
+    blocking, unused = [], []
+    for approval in missing.erc20:
+        (blocking if str(approval.spender).lower() in MARKET_SPENDERS else unused).append(
+            f"ERC-20 {approval.token_address} -> {approval.spender}")
+    for approval in missing.erc1155:
+        (blocking if str(approval.operator).lower() in MARKET_SPENDERS else unused).append(
+            f"ERC-1155 {approval.token_address} -> {approval.operator}")
+    return blocking, unused
+
+
 def client_from_env():
     """Create an authenticated SecureClient from SIGNER_PRIVATE_KEY and POLYMARKET_WALLET_ADDRESS."""
-    from polymarket import RelayerApiKey, SecureClient
+    from polymarket import SecureClient
 
     key = os.environ.get("SIGNER_PRIVATE_KEY", "").strip()
     wallet = os.environ.get("POLYMARKET_WALLET_ADDRESS", "").strip()
     if not key or not wallet:
         raise LiveSetupError("SIGNER_PRIVATE_KEY and POLYMARKET_WALLET_ADDRESS must be set in .env")
-    relayer_key = os.environ.get("POLYMARKET_RELAYER_API_KEY", "").strip()
-    relayer_address = os.environ.get("POLYMARKET_RELAYER_API_KEY_ADDRESS", "").strip()
-    api_key = RelayerApiKey(key=relayer_key, address=relayer_address) if relayer_key and relayer_address else None
-    return SecureClient.create(private_key=key, wallet=wallet, api_key=api_key)
+    return SecureClient.create(private_key=key, wallet=wallet)
 
 
 class LiveExchange(BookSource):
@@ -77,10 +93,13 @@ class LiveExchange(BookSource):
         """Fail early, with a clear message, unless the account can trade the budget."""
         approvals = self.client.get_trading_approvals_state()
         if not approvals.is_fully_approved:
-            raise LiveSetupError(
-                f"trading approvals missing for this wallet ({approvals.missing}); place one small "
-                f"order on polymarket.com with this account to set them up, then start again"
-            )
+            blocking, unused = split_missing_approvals(approvals.missing)
+            if blocking:
+                raise LiveSetupError(
+                    f"trading approvals missing for this market ({'; '.join(blocking)}); place one small "
+                    f"order on polymarket.com with this account to set them up, then start again"
+                )
+            log.warning("approvals this market does not use are missing: %s", "; ".join(unused))
         balance = self.collateral_balance()
         if balance + 1e-9 < budget_usd:
             raise LiveSetupError(
@@ -119,6 +138,11 @@ class LiveExchange(BookSource):
         return order_id
 
     def order_status(self, order_id: str) -> OrderStatus:
+        if order_id not in self._status and order_id not in self._tracked:
+            # An order from a previous run (restored from the state file): look it up now instead of
+            # assuming it still rests on the book.
+            self._tracked.add(order_id)
+            self._force_refresh = True
         self._refresh()
         return self._status.get(order_id, OrderStatus(matched=0.0, open=True))
 
@@ -129,7 +153,8 @@ class LiveExchange(BookSource):
         self._force_refresh = False
         self._refreshed_at = now
         open_now = {}
-        for order in self.client.list_open_orders(market=self.condition_id):
+        # The SDK paginator yields pages; iter_items() yields the orders themselves.
+        for order in self.client.list_open_orders(market=self.condition_id).iter_items():
             open_now[str(order.id)] = order
         for order_id in list(self._tracked):
             order = open_now.get(order_id)

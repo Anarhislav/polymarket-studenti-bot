@@ -14,6 +14,20 @@ from bot.strategy import Config, Market
 YES_T, NO_T, COND = "yes-token", "no-token", "0xcond"
 
 
+class FakePaginator:
+    """Like the SDK paginator: iterating yields pages, iter_items() yields the items."""
+
+    def __init__(self, items):
+        self._pages = [SimpleNamespace(items=tuple(items))]
+
+    def __iter__(self):
+        return iter(self._pages)
+
+    def iter_items(self):
+        for page in self._pages:
+            yield from page.items
+
+
 class FakeClient:
     def __init__(self, collateral=100.0, tokens=None, approved=True):
         self.collateral = collateral
@@ -29,7 +43,12 @@ class FakeClient:
         self.n = 0
 
     def get_trading_approvals_state(self):
-        return SimpleNamespace(is_fully_approved=self.approved, missing=() if self.approved else ("CTF",))
+        if self.approved is True:
+            return SimpleNamespace(is_fully_approved=True, missing=SimpleNamespace(erc20=(), erc1155=()))
+        spender = self.approved  # address whose pUSD allowance is missing
+        missing = SimpleNamespace(erc20=(SimpleNamespace(token_address="0xpusd", spender=spender, amount=1),),
+                                  erc1155=())
+        return SimpleNamespace(is_fully_approved=False, missing=missing)
 
     def get_balance_allowance(self, asset_type, token_id=None):
         amount = self.collateral if asset_type == "COLLATERAL" else self.tokens.get(token_id, 0.0)
@@ -47,7 +66,7 @@ class FakeClient:
     def list_open_orders(self, market):
         assert market == COND
         self.list_calls += 1
-        return list(self.open.values())
+        return FakePaginator(list(self.open.values()))
 
     def get_order(self, order_id):
         return self.final[order_id]
@@ -72,9 +91,14 @@ def make(client, **kw):
     return LiveExchange(client, YES_T, NO_T, COND, status_poll_seconds=0, **kw)
 
 
+NEG_RISK_EXCHANGE = "0xe2222d279d744050d28e00520010520000310F59"
+UNUSED_SPENDER = "0xDCa4af75705dbB50f62437045afF9921947917d2"
+
+
 def test_check_ready_requires_approvals_and_budget():
-    with pytest.raises(LiveSetupError, match="approvals missing"):
-        make(FakeClient(approved=False)).check_ready(100)
+    with pytest.raises(LiveSetupError, match="approvals missing for this market"):
+        make(FakeClient(approved=NEG_RISK_EXCHANGE)).check_ready(100)
+    assert make(FakeClient(approved=UNUSED_SPENDER)).check_ready(100) == pytest.approx(100.0)
     with pytest.raises(LiveSetupError, match=r"below budget_usd \$100.00"):
         make(FakeClient(collateral=99.5)).check_ready(100)
     assert make(FakeClient(collateral=100.0)).check_ready(100) == pytest.approx(100.0)
@@ -170,3 +194,24 @@ def test_live_needs_both_switches(monkeypatch, tmp_path, caplog):
         entry.main()
     assert exit_info.value.code == entry.EXIT_CONFIG
     assert "needs both --live" in caplog.text
+
+
+def test_order_from_previous_run_is_looked_up():
+    client = FakeClient()
+    client.final["old"] = SimpleNamespace(id="old", status="CANCELED", size_matched=Decimal("0"))
+    ex = LiveExchange(client, YES_T, NO_T, COND, status_poll_seconds=60)
+    status = ex.order_status("old")
+    assert not status.open and status.matched == 0
+
+
+def test_restart_replaces_orders_cancelled_while_stopped(tmp_path, monkeypatch):
+    import json
+    client = FakeClient()
+    client.final["old"] = SimpleNamespace(id="old", status="CANCELED", size_matched=Decimal("0"))
+    runner = Runner(make(client), Config(budget_usd=100), tmp_path, state_suffix=".live")
+    runner.orders = {"YES:buy:0": dict(id="old", price=0.38, size=26.31, matched=0.0)}
+    monkeypatch.setattr(LiveExchange, "market", lambda self: Market(0.40, 0.41))
+    runner.tick(0)
+    assert "old" not in [rec["id"] for rec in runner.orders.values()]
+    assert len(runner.orders) == 4
+    assert json.loads((tmp_path / "state.live.json").read_text())["orders"]["YES:buy:0"]["id"] != "old"

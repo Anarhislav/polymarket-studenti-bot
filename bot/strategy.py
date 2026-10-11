@@ -40,6 +40,12 @@ class Config:
     # Beyond these the stop fires at once, without waiting; 0 and 1 disable them.
     hard_stop_yes_below: float = 0.0
     hard_stop_yes_above: float = 1.0
+    # While flat (nothing bought in the current phase), arm the ladder on the side the price is
+    # closer to: switch to NO at or above the first threshold, back to YES at or below the second.
+    # The gap between them keeps the bot from re-placing orders while the price hovers in between.
+    nearest_side_entry: bool = False
+    entry_no_at_or_above: float = 0.41
+    entry_yes_at_or_below: float = 0.39
     resume_yes_at_or_above: float = 0.36
     resume_no_at_or_below: float = 0.44
     stop_trading_at: float = 0.0  # unix seconds; 0 disables the cutoff
@@ -210,6 +216,10 @@ class Strategy:
     def on_external_fill(self, side: str, kind: str, qty: float, price: float) -> None:
         """Fill that cannot be attributed to a current ladder level (e.g. after a phase change)."""
         st = self.st
+        if side != st.side and kind == "buy" and st.bought == 0 and st.shares == 0:
+            # A buy of the side just switched away from filled before its cancel landed: those
+            # shares are the position now, so trade that side.
+            self._start_phase(st, side)
         if side != st.side:
             if kind == "sell":
                 st.cash += qty * price
@@ -268,6 +278,8 @@ class Strategy:
         if self.cfg.stop_trading_at and now >= self.cfg.stop_trading_at:
             st.mode = CLOSING
             return "close"
+        if st.mode == ACTIVE:
+            self._pick_entry_side(market)
         if st.mode == STOPPED:
             if holding:
                 return "stop"
@@ -303,6 +315,16 @@ class Strategy:
             st.breach_since = None
             return "stop"
         return None
+
+    def _pick_entry_side(self, market: Market) -> None:
+        st = self.st
+        mid = market.yes_mid
+        if not self.cfg.nearest_side_entry or mid is None or st.bought > 0 or st.shares > 0:
+            return
+        if st.side == YES and mid >= self.cfg.entry_no_at_or_above:
+            self._start_phase(st, NO)
+        elif st.side == NO and mid <= self.cfg.entry_yes_at_or_below:
+            self._start_phase(st, YES)
 
     def on_liquidation(self, qty: float, price: float) -> None:
         """Record a stop-loss or cutoff sale of the held position."""
