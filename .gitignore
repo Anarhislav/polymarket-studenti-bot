@@ -9,3 +9,6 @@ bot.log
 .pytest_cache/
 .env.*
 *.pem
+!.env.example
+state*.json
+ledger*.csv

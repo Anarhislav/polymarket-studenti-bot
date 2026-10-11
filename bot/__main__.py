@@ -7,9 +7,11 @@ ever signed or sent.
 import argparse
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .notify import from_env
 from .paper import PaperExchange
 from .runner import Runner
 from .stream import MarketStream
@@ -42,25 +44,78 @@ def load_config(path: Path) -> tuple:
     return raw, cfg
 
 
+def load_dotenv(path: Path) -> None:
+    """Load KEY=VALUE lines from .env without overriding variables already set (e.g. by systemd)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+# sysexits EX_CONFIG: the service file does not restart on it, so a setup problem stops the bot
+# instead of restarting it every few seconds.
+EXIT_CONFIG = 78
+
+
+def config_error(message: str) -> None:
+    logging.error(message)
+    raise SystemExit(EXIT_CONFIG)
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--config", default="config.json")
     p.add_argument("--workdir", default=".")
+    p.add_argument("--live", action="store_true",
+                   help='trade real money; also requires "trading_mode": "live" in the config')
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    workdir = Path(args.workdir)
+    load_dotenv(workdir / ".env")
     raw, cfg = load_config(Path(args.config))
     m = raw["market"]
+
+    mode = raw.get("trading_mode", "paper")
+    if args.live != (mode == "live"):
+        # Both switches must agree, so neither an edited config nor a stray flag alone spends money.
+        config_error(f'live trading needs both --live and "trading_mode": "live" (config has "{mode}", '
+                     f'--live {"given" if args.live else "not given"})')
+    live = args.live
+
     stream = None
     if raw.get("market_data", "websocket") == "websocket":
         stream = MarketStream([m["yes_token_id"], m["no_token_id"]])
         stream.start()
-    exchange = PaperExchange(m["yes_token_id"], m["no_token_id"], stream=stream)
+    exchange = None
     try:
-        Runner(exchange, cfg, Path(args.workdir), poll_seconds=float(raw.get("poll_seconds", 5))).run()
+        if live:
+            from .live import LiveExchange, LiveSetupError, client_from_env
+
+            try:
+                exchange = LiveExchange(client_from_env(), m["yes_token_id"], m["no_token_id"],
+                                        m["condition_id"], stream=stream,
+                                        status_poll_seconds=float(raw.get("status_poll_seconds", 2)),
+                                        min_order_shares=cfg.min_order_shares)
+                balance = exchange.check_ready(cfg.budget_usd)
+            except LiveSetupError as err:
+                config_error(f"not starting live trading: {err}")
+            logging.warning("LIVE TRADING with real money: budget $%.2f, wallet balance $%.2f",
+                            cfg.budget_usd, balance)
+        else:
+            exchange = PaperExchange(m["yes_token_id"], m["no_token_id"], stream=stream)
+        Runner(exchange, cfg, workdir, poll_seconds=float(raw.get("poll_seconds", 5)),
+               notifier=from_env(prefix="[LIVE] " if live else "[PAPER] "),
+               state_suffix=".live" if live else "").run()
     finally:
         if stream is not None:
             stream.stop()
-
+        close = getattr(exchange, "close", None)
+        if close is not None:
+            close()
 
 if __name__ == "__main__":
     main()

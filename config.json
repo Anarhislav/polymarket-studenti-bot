@@ -1,6 +1,7 @@
 {
   "market": {
     "name": "Will Student List win the most seats in the 2026 Serbian parliamentary election?",
+    "condition_id": "0x258ff19b4baff0ed24bc28f58e83c8be6f2f91d9134700703e0aa51810c51a63",
     "yes_token_id": "1689950543806317773337530280926430142670579667870391801780343754845480907767",
     "no_token_id": "71659760023836608828189051368262623172491813904827045019785561054238970210854",
     "tick_size": "0.01",
@@ -18,6 +19,8 @@
     "stop_wait_hours": 3,
     "stop_trading_at_utc": "2026-10-20T00:00:00Z"
   },
+  "trading_mode": "paper",
   "market_data": "websocket",
+  "status_poll_seconds": 2,
   "poll_seconds": 5
 }

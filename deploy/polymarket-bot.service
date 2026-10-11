@@ -1,5 +1,5 @@
 [Unit]
-Description=Polymarket Student List range-trading bot
+Description=Polymarket Student List range-trading bot (live)
 Wants=network-online.target
 After=network-online.target
 
@@ -8,9 +8,11 @@ Type=simple
 User=bot
 Group=bot
 WorkingDirectory=/home/bot/polymarket-studenti-bot
-ExecStart=/home/bot/polymarket-studenti-bot/.venv/bin/python -m bot --config config.json --workdir .
-# Optional: secrets for live trading (PK, FUNDER, SIGNATURE_TYPE). The leading "-" keeps the
-# service starting while the file does not exist, as in paper mode.
+# --live only trades real money when config.json also says "trading_mode": "live"; otherwise the
+# bot refuses to start (exit 78) and the service stays stopped.
+ExecStart=/home/bot/polymarket-studenti-bot/.venv/bin/python -m bot --config config.json --workdir . --live
+# Secrets (SIGNER_PRIVATE_KEY, POLYMARKET_WALLET_ADDRESS, Telegram). The leading "-" lets systemd
+# start the bot without the file; the bot itself then refuses live trading for lack of keys.
 EnvironmentFile=-/home/bot/polymarket-studenti-bot/.env
 Environment=PYTHONUNBUFFERED=1
 
@@ -19,8 +21,9 @@ KillSignal=SIGTERM
 TimeoutStopSec=60
 Restart=always
 RestartSec=10
-# A clean exit (cutoff reached or STOP file) must not be restarted; crashes are.
-RestartPreventExitStatus=0
+# A clean exit (cutoff reached or STOP file) and a setup error (exit 78: missing keys, switches
+# not matching, balance or approvals) must not be restarted; crashes are.
+RestartPreventExitStatus=0 78
 
 NoNewPrivileges=true
 PrivateTmp=true

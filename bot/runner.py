@@ -15,26 +15,35 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from .strategy import CLOSING, DONE, Config, OrderIntent, State, Strategy
+from .notify import NullNotifier
+from .strategy import BUY, CLOSING, DONE, Config, State, Strategy
 
 log = logging.getLogger(__name__)
 
 STATUS_EVERY_SECONDS = 60
 MAX_BACKOFF_SECONDS = 30.0
+NOTIFY_AFTER_FAILURES = 3
+PLACE_RETRY_SECONDS = 30.0
+
+OUTCOME_LABEL = {"YES": "DA", "NO": "NE"}
 
 LEDGER_FIELDS = ["time_utc", "event", "outcome", "side", "key", "shares", "price", "cash",
                  "position_shares", "avg_cost", "realized_pnl", "phase", "mode"]
 
 
 class Runner:
-    def __init__(self, exchange, config: Config, workdir: Path, poll_seconds: float = 15.0):
+    def __init__(self, exchange, config: Config, workdir: Path, poll_seconds: float = 15.0,
+                 notifier=None, state_suffix: str = ""):
         self.ex = exchange
         self.cfg = config
         self.dir = workdir
-        self.state_path = workdir / "state.json"
-        self.ledger_path = workdir / "ledger.csv"
+        # Live trading keeps its own files so simulated fills never mix with real ones.
+        self.state_path = workdir / f"state{state_suffix}.json"
+        self.ledger_path = workdir / f"ledger{state_suffix}.csv"
         self.kill_path = workdir / "STOP"
         self.poll = poll_seconds
+        self.notify = notifier or NullNotifier()
+        self._place_retry_at: dict = {}
         self.orders: dict = {}
         self.strategy = self._load()
         self._running = True
@@ -81,14 +90,34 @@ class Runner:
             delta = status.matched - rec["matched"]
             if delta > 1e-9:
                 side, kind, _ = key.split(":")
-                if side == self.strategy.st.side:
+                st = self.strategy.st
+                before_pnl, before_cycles = st.realized_pnl, st.cycles
+                if side == st.side:
                     self.strategy.on_fill(key, delta, rec["price"])
                 else:
                     self.strategy.on_external_fill(side, kind, delta, rec["price"])
                 rec["matched"] = status.matched
                 self._ledger("fill", side, kind.upper(), key, delta, rec["price"])
+                self._notify_fill(side, kind, delta, rec["price"], st.realized_pnl - before_pnl)
+                if st.cycles != before_cycles:
+                    self.notify.send(
+                        f"🔄 Pozicija {OUTCOME_LABEL[side]} zatvorena, prelazim na {OUTCOME_LABEL[st.side]} "
+                        f"sa ${st.cash:.2f} (krug #{st.cycles})\n"
+                        f"Ukupno ostvareno: {_signed(st.realized_pnl)}")
             if not status.open:
                 del self.orders[key]
+
+    def _notify_fill(self, side: str, kind: str, qty: float, price: float, realized: float) -> None:
+        st = self.strategy.st
+        position = (f"Pozicija {st.shares:.2f} {OUTCOME_LABEL[st.side]}, prosek {st.cost / st.shares:.3f}"
+                    if st.shares > 0 else "Pozicija 0")
+        if kind == "buy":
+            self.notify.send(f"🟢 Kupljeno {qty:.2f} {OUTCOME_LABEL[side]} @ {price:.2f} (${qty * price:.2f})\n"
+                             f"{position} | gotovina ${st.cash:.2f}")
+        else:
+            self.notify.send(f"💰 Prodato {qty:.2f} {OUTCOME_LABEL[side]} @ {price:.2f}, "
+                             f"zarada {_signed(realized)}\n"
+                             f"{position} | gotovina ${st.cash:.2f} | ukupno ostvareno {_signed(st.realized_pnl)}")
 
     def _cancel_all_tracked(self) -> None:
         for rec in list(self.orders.values()):
@@ -107,11 +136,30 @@ class Runner:
             if intent is None or abs(intent.price - rec["price"]) > 1e-9 or abs(intent.size - remaining) >= 1.0:
                 self.ex.cancel(rec["id"])
         self._sync_fills()
+        placed = []
         for key, intent in wanted.items():
             if key in self.orders:
                 continue
-            order_id = self.ex.place_limit(intent.outcome, intent.side, intent.price, intent.size)
+            if time.time() < self._place_retry_at.get(key, 0.0):
+                continue
+            try:
+                order_id = self.ex.place_limit(intent.outcome, intent.side, intent.price, intent.size)
+            except Exception as err:  # one rejected order must not stop the others or the loop
+                first = key not in self._place_retry_at
+                self._place_retry_at[key] = time.time() + PLACE_RETRY_SECONDS
+                log.warning("could not place %s (%s %.2f @ %.2f): %s; retrying in %.0fs",
+                            key, intent.side, intent.size, intent.price, err, PLACE_RETRY_SECONDS)
+                if first:
+                    self.notify.send(f"❗ Nalog nije postavljen: {'KUPI' if intent.side == BUY else 'PRODAJ'} "
+                                     f"{OUTCOME_LABEL[intent.outcome]} {intent.size:.2f} @ {intent.price:.2f}\n{err}")
+                continue
+            self._place_retry_at.pop(key, None)
             self.orders[key] = dict(id=order_id, price=intent.price, size=intent.size, matched=0.0)
+            placed.append(intent)
+        if placed:
+            lines = [f"• {'KUPI' if i.side == BUY else 'PRODAJ'} {OUTCOME_LABEL[i.outcome]} "
+                     f"{i.size:.2f} @ {i.price:.2f} (${i.size * i.price:.2f})" for i in placed]
+            self.notify.send("📋 Postavljeni nalozi:\n" + "\n".join(lines))
 
     def _liquidate(self, reason: str) -> None:
         self._cancel_all_tracked()
@@ -122,8 +170,14 @@ class Runner:
             if sold <= 0:
                 log.warning("%s: nothing sold (no bid?), retrying next tick", reason)
                 return
+            before_pnl = st.realized_pnl
             self.strategy.on_liquidation(sold, price)
             self._ledger(reason, st.side, "SELL", reason, sold, price)
+            label = "Stop-loss" if reason == "stop_loss" else "Zatvaranje (datum prestanka)"
+            self.notify.send(
+                f"⚠️ {label}: prodato {sold:.2f} {OUTCOME_LABEL[st.side]} @ {price:.2f}, "
+                f"{_signed(st.realized_pnl - before_pnl)}\n"
+                f"Gotovina ${st.cash:.2f} | ukupno ostvareno {_signed(st.realized_pnl)}")
         elif st.mode == CLOSING:
             st.mode = DONE
 
@@ -160,13 +214,22 @@ class Runner:
         signal.signal(signal.SIGINT, self._stop)
         signal.signal(signal.SIGTERM, self._stop)
         failures = 0
+        alerted = False
+        st = self.strategy.st
+        self.notify.send(f"▶️ Bot pokrenut: faza {OUTCOME_LABEL[st.side]}, {st.mode}, gotovina ${st.cash:.2f}, "
+                         f"pozicija {st.shares:.2f}")
+        reason = "završen (datum prestanka)"
         while self._running and self.strategy.st.mode != DONE:
             if self.kill_path.exists():
                 log.warning("STOP file found, cancelling orders and exiting")
                 self.kill_path.unlink(missing_ok=True)  # otherwise the next start exits at once
+                reason = "zaustavljen (STOP fajl)"
                 break
             try:
                 self.tick(time.time())
+                if alerted:
+                    self.notify.send("✅ Bot ponovo radi normalno")
+                    alerted = False
                 failures = 0
                 delay = self.poll
             except Exception:  # a transient API error must not kill the loop
@@ -174,14 +237,27 @@ class Runner:
                 # Back off so errors such as rate limiting are not hammered several times a second.
                 delay = min(self.poll * 2 ** failures, MAX_BACKOFF_SECONDS)
                 log.exception("tick failed (%d in a row), retrying in %.1fs", failures, delay)
+                if failures == NOTIFY_AFTER_FAILURES:
+                    self.notify.send(f"❗ Bot ima greške ({failures} puta zaredom), pokušava ponovo. Pogledaj log.")
+                    alerted = True
             wait = getattr(self.ex, "wait_for_update", None)
             if failures == 0 and wait is not None:
                 wait(delay)
             else:
                 time.sleep(delay)
+        if not self._running:
+            reason = "zaustavljen (signal)"
         self._cancel_all_tracked()
         self._save()
         log.info("stopped; open bot orders cancelled, position left as is: %s", asdict(self.strategy.st))
+        st = self.strategy.st
+        self.notify.send(f"⏹ Bot {reason}. Gotovina ${st.cash:.2f}, pozicija {st.shares:.2f} "
+                         f"{OUTCOME_LABEL[st.side]}, ukupno ostvareno {_signed(st.realized_pnl)}")
+        self.notify.close()
 
     def _stop(self, *_):
         self._running = False
+
+
+def _signed(amount: float) -> str:
+    return f"{'+' if amount >= 0 else '-'}${abs(amount):.2f}"
