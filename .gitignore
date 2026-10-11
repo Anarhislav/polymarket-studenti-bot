@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+state.json
+state.tmp
+ledger.csv
+STOP
+.env
+bot.log
+.pytest_cache/
+.env.*
+*.pem
