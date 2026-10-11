@@ -11,6 +11,7 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY bot ./bot
+COPY dashboard ./dashboard
 
 # State, ledger and the STOP file live in /data, a volume, so they survive rebuilds.
 # The fixed uid lets the host prepare a bind-mounted ./data directory for it.

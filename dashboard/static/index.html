@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="sr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studenti bot</title>
+<style>
+/* Layout: status header, KPI row, three detail cards, value-over-time chart, orders, ledger. */
+:root {
+  --bg: #f4f5f3; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --line: #e1e0d9; --axis: #c3c2b7; --series: #2a78d6; --good: #0ca30c; --bad: #d03b3b;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111110; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --line: #2c2c2a; --axis: #383835; --series: #3987e5; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111110; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --line: #2c2c2a; --axis: #383835; --series: #3987e5; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); padding-inline: 16px; padding-block: 24px 48px; }
+main { max-width: 1100px; margin: 0 auto; display: grid; gap: 20px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+h1 { font-size: 22px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.06em; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.updated { color: var(--muted); font-size: 13px; margin-left: auto; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.kpi .label { font-size: 13px; color: var(--ink-2); }
+.kpi .val { font: 600 24px/1.2 var(--mono); font-variant-numeric: tabular-nums; margin-top: 4px; }
+.kpi.hero .val { font-size: clamp(24px, 7vw, 34px); }
+.kpi .val { overflow-wrap: anywhere; }
+.kpi .sub { font-size: 13px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.pos { color: var(--good); } .neg { color: var(--bad); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; }
+dt { color: var(--ink-2); font-size: 14px; }
+dd { margin: 0; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 14px; }
+.chart-wrap { position: relative; }
+svg { display: block; width: 100%; height: 260px; overflow: visible; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 10px; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; display: none; }
+.tbl { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+td.n, th.n { text-align: right; font-family: var(--mono); }
+.empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+.note { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Studenti bot</h1>
+    <span class="pill" id="mode">…</span>
+    <span class="pill"><span class="dot" id="run-dot"></span><span id="run-text">učitavanje…</span></span>
+    <span class="updated" id="updated"></span>
+  </header>
+
+  <section class="kpis" aria-label="Rezultat">
+    <div class="card kpi hero"><div class="label">Ukupna vrednost</div><div class="val" id="k-value">–</div><div class="sub" id="k-budget"></div></div>
+    <div class="card kpi"><div class="label">Profit</div><div class="val" id="k-profit">–</div><div class="sub" id="k-profit-pct"></div></div>
+    <div class="card kpi"><div class="label">Ostvareno</div><div class="val" id="k-realized">–</div><div class="sub">zatvorene prodaje</div></div>
+    <div class="card kpi"><div class="label">Neostvareno</div><div class="val" id="k-unrealized">–</div><div class="sub">otvorena pozicija</div></div>
+    <div class="card kpi"><div class="label">Gotovina</div><div class="val" id="k-cash">–</div><div class="sub">pUSD</div></div>
+  </section>
+
+  <section class="cards">
+    <div class="card"><h2>Pozicija</h2><dl id="d-position"></dl></div>
+    <div class="card"><h2>Tržište „Studenti DA"</h2><dl id="d-market"></dl></div>
+    <div class="card"><h2>Rad</h2><dl id="d-run"></dl></div>
+  </section>
+
+  <section class="card">
+    <h2>Vrednost portfolija</h2>
+    <div class="chart-wrap"><svg id="chart" role="img" aria-label="Vrednost portfolija kroz vreme"></svg><div class="tip" id="tip"></div></div>
+    <p class="note">Vrednost pri svakoj popuni (gotovina + pozicija po ceni popune) i sada (po najboljoj ponudi). Isprekidana linija je početni budžet.</p>
+  </section>
+
+  <section class="card">
+    <h2>Otvoreni nalozi</h2>
+    <div class="tbl"><table><thead><tr><th>Nalog</th><th>Strana</th><th class="n">Cena</th><th class="n">Deonice</th><th class="n">Popunjeno</th><th class="n">Iznos</th></tr></thead><tbody id="t-orders"></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <h2>Evidencija (najnovije prvo)</h2>
+    <div class="tbl"><table><thead><tr><th>Vreme (UTC)</th><th>Događaj</th><th>Strana</th><th class="n">Deonice</th><th class="n">Cena</th><th class="n">Iznos</th><th class="n">Gotovina</th><th class="n">Ostvareno ukupno</th></tr></thead><tbody id="t-ledger"></tbody></table></div>
+  </section>
+</main>
+
+<script>
+const LABEL = { YES: "DA", NO: "NE" };
+const $ = (id) => document.getElementById(id);
+const usd = (x) => x == null ? "–" : (x < 0 ? "-" : "") + "$" + Math.abs(x).toFixed(2);
+const signed = (x) => x == null ? "–" : (x >= 0 ? "▲ +" : "▼ -") + "$" + Math.abs(x).toFixed(2);
+const pct = (x) => x == null ? "" : (x >= 0 ? "+" : "") + x.toFixed(1) + "%";
+const cents = (x) => x == null ? "–" : (x * 100).toFixed(1).replace(/\.0$/, "") + "¢";
+const dt = (s) => s ? new Date(s * 1000).toLocaleString("sr-RS", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function dur(sec) {
+  if (sec == null) return "–";
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+  return (d ? d + "d " : "") + (d || h ? h + "h " : "") + m + "min";
+}
+
+function setSigned(el, x, text) {
+  el.textContent = text;
+  el.className = "val " + (x > 0 ? "pos" : x < 0 ? "neg" : "");
+}
+
+function fillDl(el, rows) {
+  el.replaceChildren(...rows.flatMap(([k, v]) => {
+    const a = document.createElement("dt"); a.textContent = k;
+    const b = document.createElement("dd"); b.textContent = v;
+    return [a, b];
+  }));
+}
+
+function fillTable(el, rows, emptyText, cols) {
+  if (!rows.length) {
+    const tr = document.createElement("tr"), td = document.createElement("td");
+    td.colSpan = cols; td.className = "empty"; td.textContent = emptyText;
+    tr.append(td); el.replaceChildren(tr); return;
+  }
+  el.replaceChildren(...rows.map((cells) => {
+    const tr = document.createElement("tr");
+    for (const [text, numeric] of cells) {
+      const td = document.createElement("td"); td.textContent = text;
+      if (numeric) td.className = "n";
+      tr.append(td);
+    }
+    return tr;
+  }));
+}
+
+function drawChart(points, budget) {
+  const svg = $("chart"), tip = $("tip");
+  svg.replaceChildren(); tip.style.display = "none";
+  const W = svg.clientWidth || 800, H = 260, L = 56, R = 12, T = 12, B = 28;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const ns = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.append(e); return e; };
+  if (points.length < 2) {
+    el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", fill: css("--muted"), "font-size": 13 }).textContent = "Još nema dovoljno podataka za grafikon.";
+    return;
+  }
+  const t0 = points[0].t, t1 = points[points.length - 1].t || t0 + 1;
+  let lo = Math.min(budget, ...points.map(p => p.value)), hi = Math.max(budget, ...points.map(p => p.value));
+  const pad = Math.max((hi - lo) * 0.1, 1); lo -= pad; hi += pad;
+  const x = (t) => L + (t - t0) / Math.max(t1 - t0, 1) * (W - L - R);
+  const y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+  // Round tick values (1, 2 or 5 x 10^n) so every label names exactly the value of its gridline.
+  const raw = (hi - lo) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 5, 10].map(k => k * mag).find(s => s >= raw);
+  const decimals = step < 1 ? 2 : 0;
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) {
+    const yy = y(v);
+    el("line", { x1: L, x2: W - R, y1: yy, y2: yy, stroke: css("--line"), "stroke-width": 1 });
+    el("text", { x: L - 8, y: yy + 4, "text-anchor": "end", fill: css("--muted"), "font-size": 11, "font-family": css("--mono") }).textContent = "$" + v.toFixed(decimals);
+  }
+  el("line", { x1: L, x2: W - R, y1: H - B, y2: H - B, stroke: css("--axis"), "stroke-width": 1 });
+  for (let i = 0; i <= 3; i++) {
+    const t = t0 + (t1 - t0) * i / 3;
+    el("text", { x: x(t), y: H - 8, "text-anchor": i === 0 ? "start" : i === 3 ? "end" : "middle", fill: css("--muted"), "font-size": 11 }).textContent = dt(t);
+  }
+  el("line", { x1: L, x2: W - R, y1: y(budget), y2: y(budget), stroke: css("--muted"), "stroke-width": 1, "stroke-dasharray": "4 4" });
+  const d = points.map((p, i) => (i ? "L" : "M") + x(p.t).toFixed(1) + " " + y(p.value).toFixed(1)).join(" ");
+  el("path", { d: d + ` L${x(t1).toFixed(1)} ${H - B} L${L} ${H - B} Z`, fill: css("--series"), "fill-opacity": 0.1, stroke: "none" });
+  el("path", { d, fill: "none", stroke: css("--series"), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" });
+  const last = points[points.length - 1];
+  el("circle", { cx: x(last.t), cy: y(last.value), r: 4, fill: css("--series"), stroke: css("--surface"), "stroke-width": 2 });
+  const cross = el("line", { y1: T, y2: H - B, stroke: css("--muted"), "stroke-width": 1, visibility: "hidden" });
+  const dot = el("circle", { r: 4, fill: css("--series"), stroke: css("--surface"), "stroke-width": 2, visibility: "hidden" });
+  const hit = el("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" });
+  hit.addEventListener("mousemove", (ev) => {
+    const box = svg.getBoundingClientRect(), mx = (ev.clientX - box.left) * W / box.width;
+    let best = points[0];
+    for (const p of points) if (Math.abs(x(p.t) - mx) < Math.abs(x(best.t) - mx)) best = p;
+    cross.setAttribute("x1", x(best.t)); cross.setAttribute("x2", x(best.t)); cross.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", x(best.t)); dot.setAttribute("cy", y(best.value)); dot.setAttribute("visibility", "visible");
+    tip.textContent = `${dt(best.t)} · ${usd(best.value)} (${signed(best.value - budget)})`;
+    tip.style.display = "block";
+    const px = x(best.t) * box.width / W;
+    tip.style.left = Math.min(Math.max(px - tip.offsetWidth / 2, 0), box.width - tip.offsetWidth) + "px";
+    tip.style.top = "0px";
+  });
+  hit.addEventListener("mouseleave", () => { cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); tip.style.display = "none"; });
+}
+
+let last = null;
+function render(s) {
+  last = s;
+  if (!s.available) {
+    $("run-text").textContent = s.message; $("mode").textContent = (s.mode || "").toUpperCase();
+    return;
+  }
+  $("mode").textContent = s.mode === "live" ? "LIVE · pravi novac" : "PAPER · bez novca";
+  $("run-dot").style.background = s.running ? css("--good") : css("--bad");
+  $("run-text").textContent = s.running ? "Radi" : (s.state_mode === "DONE" ? "Završen" : "Ne radi");
+  $("updated").textContent = s.updated_at ? "Poslednji otkucaj bota: pre " + dur(s.now - s.updated_at) : "";
+
+  $("k-value").textContent = usd(s.value);
+  $("k-budget").textContent = "početni budžet " + usd(s.budget);
+  setSigned($("k-profit"), s.profit, signed(s.profit));
+  $("k-profit-pct").textContent = pct(s.profit_pct);
+  setSigned($("k-realized"), s.realized, signed(s.realized));
+  setSigned($("k-unrealized"), s.unrealized, signed(s.unrealized));
+  $("k-cash").textContent = usd(s.cash);
+
+  const p = s.position;
+  fillDl($("d-position"), [
+    ["Faza", LABEL[s.phase] + " (" + s.state_mode + ")"],
+    ["Deonice", p.shares.toFixed(2) + " " + LABEL[p.outcome]],
+    ["Prosečna cena", p.avg_cost == null ? "–" : cents(p.avg_cost)],
+    ["Uloženo", usd(p.cost)],
+    ["Vrednost sada", usd(p.value)],
+    ...Object.entries(s.leftover).filter(([, v]) => v > 0).map(([k, v]) => ["Ostatak " + LABEL[k], v.toFixed(2)]),
+  ]);
+  const m = s.market || {};
+  const mid = m.yes_bid != null && m.yes_ask != null ? (m.yes_bid + m.yes_ask) / 2 : null;
+  fillDl($("d-market"), [
+    ["Najbolja ponuda", cents(m.yes_bid)],
+    ["Najbolja tražnja", cents(m.yes_ask)],
+    ["Sredina", cents(mid)],
+    ["NE (ponuda / tražnja)", m.yes_ask == null ? "–" : cents(1 - m.yes_ask) + " / " + cents(1 - m.yes_bid)],
+  ]);
+  fillDl($("d-run"), [
+    ["Radi od", dt(s.started_at)],
+    ["Trajanje", s.started_at ? dur(s.now - s.started_at) : "–"],
+    ["Prestanak", s.stop_trading_at ? dt(s.stop_trading_at) : "nije podešen"],
+    ["Do prestanka", s.stop_trading_at ? dur(s.stop_trading_at - s.now) : "–"],
+    ["Završenih krugova", String(s.cycles)],
+    ["Popune (kup./prod.)", s.trades.count + " (" + s.trades.buys + "/" + s.trades.sells + ")"],
+    ["Promet", usd(s.trades.volume)],
+  ]);
+
+  fillTable($("t-orders"), s.orders.map(o => [
+    [o.key, false], [(o.side === "BUY" ? "KUPI " : "PRODAJ ") + LABEL[o.outcome], false],
+    [cents(o.price), true], [o.size.toFixed(2), true], [o.matched.toFixed(2), true], [usd(o.size * o.price), true],
+  ]), "Nema otvorenih naloga.", 6);
+  fillTable($("t-ledger"), s.ledger.map(r => [
+    [r.time.replace("T", " ").replace("Z", ""), false], [r.event, false],
+    [(r.side === "BUY" ? "KUPI " : "PRODAJ ") + LABEL[r.outcome], false],
+    [r.shares.toFixed(2), true], [cents(r.price), true], [usd(r.shares * r.price), true],
+    [usd(r.cash), true], [signed(r.realized_pnl), true],
+  ]), "Još nema popuna.", 8);
+  drawChart(s.equity, s.budget);
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/summary", { cache: "no-store" });
+    render(await r.json());
+  } catch (e) {
+    $("run-text").textContent = "Dashboard ne može da pročita podatke";
+    $("run-dot").style.background = css("--bad");
+  }
+}
+refresh();
+setInterval(refresh, 10000);
+addEventListener("resize", () => last && last.available && drawChart(last.equity, last.budget));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => last && render(last));
+</script>
+</body>
+</html>

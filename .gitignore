@@ -13,3 +13,6 @@ bot.log
 state*.json
 ledger*.csv
 data/
+status*.json
+status*.tmp
+deploy/auth.caddy

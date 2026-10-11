@@ -74,6 +74,49 @@ slow or unreachable Telegram never delays trading.
 Replays historical trades through the same strategy the bot uses. Fees are not included
 (this market has them enabled, `politics_fees`).
 
+## Dashboard
+
+A read-only web page with the bot's value, profit (realized and unrealized), cash, position,
+phase, market price, running time, time to the cutoff, open orders, a value-over-time chart and
+the full ledger. It reads the bot's `status.live.json`, `state.live.json` and `ledger.live.csv`,
+refreshes every 10 seconds and cannot place or cancel orders.
+
+```bash
+.venv/bin/python -m dashboard --data .           # http://127.0.0.1:8080 (live files)
+.venv/bin/python -m dashboard --data . --paper   # paper-trading files
+```
+
+In Docker it runs as the `dashboard` service next to the bot, bound to the server's loopback
+only. Open it from your machine through an SSH tunnel, then browse to http://localhost:8080:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 root@DROPLET_IP
+```
+
+### Dashboard on the web (HTTPS + password)
+
+With Docker, the optional `caddy` service puts the dashboard on the web behind HTTPS (a free
+Let's Encrypt certificate) and a username and password. On the server, in the repo directory:
+
+1. Pick an address. Either a domain whose DNS A record points to the server's IP, or, without a
+   domain, `<ip-with-dashes>.sslip.io` (e.g. `165-22-197-17.sslip.io`), which resolves to that IP.
+2. Set the username and password (asked twice, not echoed; only a bcrypt hash is stored in
+   `deploy/auth.caddy`, which is git-ignored):
+
+   ```bash
+   bash deploy/set-dashboard-password.sh
+   ```
+3. Add to `.env`:
+
+   ```
+   COMPOSE_PROFILES=web
+   DASHBOARD_DOMAIN=165-22-197-17.sslip.io
+   ```
+4. Start it with `docker compose up -d`, then open `https://<DASHBOARD_DOMAIN>`.
+
+Ports 80 and 443 must be reachable from the internet (Let's Encrypt checks port 80). Run the
+password script again to change the password; it reloads Caddy.
+
 ## Docker
 
 The image holds only the code; `config.json` is mounted read-only, secrets come from `.env` via

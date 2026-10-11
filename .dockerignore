@@ -16,3 +16,5 @@ bot.log
 .pytest_cache/
 tests/
 deploy/
+status*.json
+deploy/auth.caddy

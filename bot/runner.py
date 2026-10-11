@@ -41,6 +41,10 @@ class Runner:
         self.state_path = workdir / f"state{state_suffix}.json"
         self.ledger_path = workdir / f"ledger{state_suffix}.csv"
         self.kill_path = workdir / "STOP"
+        # Read by the dashboard: the latest market view, valuation and open orders.
+        self.status_path = workdir / f"status{state_suffix}.json"
+        self.mode = "live" if state_suffix == ".live" else "paper"
+        self._last_market = None
         self.poll = poll_seconds
         self.notify = notifier or NullNotifier()
         self._place_retry_at: dict = {}
@@ -203,16 +207,40 @@ class Runner:
         changed = snapshot != self._last_snapshot
         if changed:
             self._save()
+        self._last_market = market
         if changed or now - self._last_status >= STATUS_EVERY_SECONDS:
+            self._write_status(now, running=True)
             log.info("YES bid/ask %s/%s | %s %s | cash $%.2f | %.2f shares | value $%.2f | realized $%.2f",
                      market.yes_bid, market.yes_ask, st.side, st.mode, st.cash, st.shares,
                      self.strategy.mark_to_market(market), st.realized_pnl)
             self._last_status = now
         self._last_snapshot = snapshot
 
+    def _write_status(self, now: float, running: bool) -> None:
+        st = self.strategy.st
+        market = self._last_market
+        orders = []
+        for key, rec in sorted(self.orders.items()):
+            outcome, kind, _ = key.split(":")
+            orders.append(dict(key=key, outcome=outcome, side=kind.upper(), price=rec["price"],
+                               size=rec["size"], matched=rec["matched"]))
+        status = dict(
+            updated_at=now, running=running, mode=self.mode, budget_usd=self.cfg.budget_usd,
+            stop_trading_at=self.cfg.stop_trading_at or None,
+            market=dict(yes_bid=market.yes_bid, yes_ask=market.yes_ask) if market else None,
+            value=self.strategy.mark_to_market(market) if market else None,
+            strategy=st.to_dict(), orders=orders,
+        )
+        tmp = self.status_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(status, indent=2))
+        os.replace(tmp, self.status_path)
+
     def run(self) -> None:
         signal.signal(signal.SIGINT, self._stop)
         signal.signal(signal.SIGTERM, self._stop)
+        if self.strategy.st.started_at is None:
+            self.strategy.st.started_at = time.time()
+            self._save()
         failures = 0
         alerted = False
         st = self.strategy.st
@@ -249,6 +277,7 @@ class Runner:
             reason = "zaustavljen (signal)"
         self._cancel_all_tracked()
         self._save()
+        self._write_status(time.time(), running=False)
         log.info("stopped; open bot orders cancelled, position left as is: %s", asdict(self.strategy.st))
         st = self.strategy.st
         self.notify.send(f"⏹ Bot {reason}. Gotovina ${st.cash:.2f}, pozicija {st.shares:.2f} "

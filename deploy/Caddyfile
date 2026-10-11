@@ -1,0 +1,18 @@
+# HTTPS in front of the dashboard, with a username and password.
+# DASHBOARD_DOMAIN comes from .env (e.g. bot.example.com, or 165-22-197-17.sslip.io without a
+# domain of your own); Caddy gets and renews the Let's Encrypt certificate itself.
+# The credentials are in auth.caddy, written by deploy/set-dashboard-password.sh (bcrypt hash only).
+{$DASHBOARD_DOMAIN} {
+	import /etc/caddy/auth.caddy
+
+	encode gzip
+	reverse_proxy dashboard:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

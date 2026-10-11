@@ -107,6 +107,7 @@ class State:
     realized_pnl: float = 0.0
     breach_since: Optional[float] = None
     cycles: int = 0
+    started_at: Optional[float] = None  # first start of this state (unix seconds)
     leftover: dict = field(default_factory=dict)  # outcome -> shares below the exchange minimum
 
     def to_dict(self) -> dict:
