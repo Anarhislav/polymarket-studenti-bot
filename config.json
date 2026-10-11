@@ -19,7 +19,7 @@
     "stop_wait_hours": 3,
     "stop_trading_at_utc": "2026-10-20T00:00:00Z",
     "nearest_side_entry": true,
-    "entry_no_at_or_above": 0.41,
+    "entry_no_at_or_above": 0.405,
     "entry_yes_at_or_below": 0.39
   },
   "trading_mode": "paper",

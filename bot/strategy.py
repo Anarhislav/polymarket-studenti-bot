@@ -322,9 +322,10 @@ class Strategy:
         mid = market.yes_mid
         if not self.cfg.nearest_side_entry or mid is None or st.bought > 0 or st.shares > 0:
             return
-        if st.side == YES and mid >= self.cfg.entry_no_at_or_above:
+        # The tolerance keeps a midpoint like (0.40 + 0.41) / 2 from missing 0.405 by a rounding error.
+        if st.side == YES and mid >= self.cfg.entry_no_at_or_above - 1e-9:
             self._start_phase(st, NO)
-        elif st.side == NO and mid <= self.cfg.entry_yes_at_or_below:
+        elif st.side == NO and mid <= self.cfg.entry_yes_at_or_below + 1e-9:
             self._start_phase(st, YES)
 
     def on_liquidation(self, qty: float, price: float) -> None:

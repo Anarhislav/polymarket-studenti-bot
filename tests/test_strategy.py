@@ -233,3 +233,10 @@ def test_late_fill_of_cancelled_side_becomes_the_position():
     s.on_external_fill(YES, "buy", 26.31, 0.38)
     assert s.st.side == YES and s.st.shares == pytest.approx(26.31)
     assert s.st.cash == pytest.approx(100 - 26.31 * 0.38)
+
+
+@pytest.mark.parametrize("bid,ask,want", [(0.40, 0.41, NO), (0.39, 0.41, YES), (0.40, 0.40, YES)])
+def test_entry_threshold_at_midpoint(bid, ask, want):
+    s = Strategy(Config(budget_usd=100, nearest_side_entry=True, entry_no_at_or_above=0.405))
+    s.check_risk(Market(bid, ask), 0)
+    assert s.st.side == want

@@ -15,7 +15,7 @@ All levels are YES prices.
 
 - Once the whole position is sold, the bot switches to the opposite phase with all its cash.
 - **Nearest-side entry** (`nearest_side_entry`, on in `config.json`): while the bot holds nothing
-  in the current phase, it arms the ladder on the side the price is closer to. At YES ≥ 41% it
+  in the current phase, it arms the ladder on the side the price is closer to. At YES ≥ 40.5% it
   cancels the YES buy ladder and places the NO buy ladder; at YES ≤ 39% it switches back. The gap
   keeps it from re-placing orders while the price hovers around 40%. Once anything is bought,
   the side is locked.
