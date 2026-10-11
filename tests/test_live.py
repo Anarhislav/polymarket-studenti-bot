@@ -41,6 +41,9 @@ class FakeClient:
         self.market_resp = None
         self.list_calls = 0
         self.n = 0
+        self.unreadable_orders = False
+        self.trades = []
+        self.trades_error = False
 
     def get_trading_approvals_state(self):
         if self.approved is True:
@@ -69,7 +72,16 @@ class FakeClient:
         return FakePaginator(list(self.open.values()))
 
     def get_order(self, order_id):
+        if self.unreadable_orders:
+            from polymarket.errors import UnexpectedResponseError
+            raise UnexpectedResponseError("OpenOrder response did not match expected shape")
         return self.final[order_id]
+
+    def list_account_trades(self, market):
+        assert market == COND
+        if self.trades_error:
+            raise RuntimeError("trades unavailable")
+        return FakePaginator(self.trades)
 
     def cancel_order(self, order_id):
         self.cancelled.append(order_id)
@@ -215,3 +227,51 @@ def test_restart_replaces_orders_cancelled_while_stopped(tmp_path, monkeypatch):
     assert "old" not in [rec["id"] for rec in runner.orders.values()]
     assert len(runner.orders) == 4
     assert json.loads((tmp_path / "state.live.json").read_text())["orders"]["YES:buy:0"]["id"] != "old"
+
+
+def trade(taker_order_id="other", size="0", makers=(), side="TAKER", status="CONFIRMED"):
+    return SimpleNamespace(trader_side=side, taker_order_id=taker_order_id, size=Decimal(size), status=status,
+                           maker_orders=tuple(SimpleNamespace(order_id=o, matched_amount=Decimal(a)) for o, a in makers))
+
+
+@pytest.mark.parametrize("trades,want", [
+    ([], 0.0),
+    ([trade(makers=[("o1", "10"), ("x", "5")], side="MAKER"), trade(makers=[("o1", "17")], side="MAKER")], 27.0),
+    ([trade(taker_order_id="o1", size="27")], 27.0),
+    ([trade(taker_order_id="o1", size="27", status="FAILED")], 0.0),
+])
+def test_unreadable_get_order_falls_back_to_trades(trades, want):
+    client = FakeClient()
+    ex = make(client)
+    oid = ex.place_limit("YES", "BUY", 0.37, 27)
+    client.open.pop(oid)
+    client.unreadable_orders = True
+    client.trades = trades
+    status = ex.order_status(oid)
+    assert not status.open and status.matched == pytest.approx(want)
+    assert ex.unresolved_fills == []
+
+
+def test_last_seen_fill_used_when_nothing_is_readable():
+    client = FakeClient()
+    ex = make(client)
+    oid = ex.place_limit("YES", "BUY", 0.37, 27)
+    client.fill(oid, 10, still_open=True)
+    ex.order_status(oid)
+    client.open.pop(oid)
+    client.unreadable_orders = True
+    client.trades_error = True
+    status = ex.order_status(oid)
+    assert not status.open and status.matched == 10
+    assert ex.unresolved_fills == [oid]
+
+
+def test_runner_keeps_running_when_closed_order_is_unreadable(tmp_path, monkeypatch):
+    client = FakeClient()
+    client.unreadable_orders = True
+    runner = Runner(make(client), Config(budget_usd=100), tmp_path, state_suffix=".live")
+    runner.orders = {"YES:buy:0": dict(id="stale", price=0.38, size=26.31, matched=0.0)}
+    monkeypatch.setattr(LiveExchange, "market", lambda self: Market(0.40, 0.41))
+    runner.tick(0)
+    assert "stale" not in [rec["id"] for rec in runner.orders.values()]
+    assert len(runner.orders) == 4

@@ -190,6 +190,12 @@ class Runner:
     def tick(self, now: float) -> None:
         market = self.ex.market()
         self._sync_fills()
+        unresolved = getattr(self.ex, "unresolved_fills", None)
+        if unresolved:
+            log.error("final fills of %s could not be read; check them on polymarket.com", unresolved)
+            self.notify.send("❗ Nisam mogao da pročitam konačne popune za naloge "
+                             f"{', '.join(o[:10] + '…' for o in unresolved)}. Proveri Portfolio na polymarket.com.")
+            unresolved.clear()
         action = self.strategy.check_risk(market, now)
         if action == "stop":
             log.warning("stop-loss: selling the position (price stayed beyond the limit for %ss)",

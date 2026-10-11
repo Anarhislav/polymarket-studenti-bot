@@ -84,6 +84,9 @@ class LiveExchange(BookSource):
         self.min_shares = min_order_shares
         self._tracked: set = set()
         self._status: dict = {}
+        self._seen_matched: dict = {}
+        # Orders whose final fill could not be read at all; the runner reports them.
+        self.unresolved_fills: list = []
         self._refreshed_at = 0.0
         self._force_refresh = False
 
@@ -156,16 +159,66 @@ class LiveExchange(BookSource):
         # The SDK paginator yields pages; iter_items() yields the orders themselves.
         for order in self.client.list_open_orders(market=self.condition_id).iter_items():
             open_now[str(order.id)] = order
+        gone = []
         for order_id in list(self._tracked):
             order = open_now.get(order_id)
             if order is None:
-                # No longer open: read its final state once (filled, partly filled or cancelled).
-                order = self.client.get_order(order_id=order_id)
+                gone.append(order_id)
+                continue
             matched = float(order.size_matched)
+            self._seen_matched[order_id] = matched
             is_open = str(order.status).upper() in OPEN_STATUSES
             self._status[order_id] = OrderStatus(matched=matched, open=is_open)
             if not is_open:
-                self._tracked.discard(order_id)
+                self._close(order_id)
+        if gone:
+            for order_id, matched in self._final_matched(gone).items():
+                self._status[order_id] = OrderStatus(matched=matched, open=False)
+                self._close(order_id)
+
+    def _close(self, order_id: str) -> None:
+        self._tracked.discard(order_id)
+        self._seen_matched.pop(order_id, None)
+
+    def _final_matched(self, order_ids: list) -> dict:
+        """Shares filled by orders that left the open list (filled, partly filled or cancelled).
+
+        get_order is tried first, but the SDK rejects the response shape it gets for some closed
+        orders, so the fills are otherwise summed from this account's trades on the market. If
+        both fail, the last matched amount seen while the order was open is used and logged,
+        so one unreadable order can never stall the bot.
+        """
+        result, unresolved = {}, []
+        for order_id in order_ids:
+            try:
+                order = self.client.get_order(order_id=order_id)
+                result[order_id] = max(float(order.size_matched), self._seen_matched.get(order_id, 0.0))
+            except Exception as err:
+                log.info("get_order %s unreadable (%s); using account trades", order_id, type(err).__name__)
+                unresolved.append(order_id)
+        if not unresolved:
+            return result
+        try:
+            filled = self._filled_from_trades(set(unresolved))
+        except Exception:
+            log.exception("could not read account trades; using last seen fills for %s", unresolved)
+            filled = {}
+            self.unresolved_fills.extend(unresolved)
+        for order_id in unresolved:
+            result[order_id] = max(filled.get(order_id, 0.0), self._seen_matched.get(order_id, 0.0))
+        return result
+
+    def _filled_from_trades(self, order_ids: set) -> dict:
+        filled = {order_id: 0.0 for order_id in order_ids}
+        for trade in self.client.list_account_trades(market=self.condition_id).iter_items():
+            if str(trade.status).upper() == "FAILED":
+                continue
+            if trade.trader_side == "TAKER" and str(trade.taker_order_id) in filled:
+                filled[str(trade.taker_order_id)] += float(trade.size)
+            for maker in trade.maker_orders:
+                if str(maker.order_id) in filled:
+                    filled[str(maker.order_id)] += float(maker.matched_amount)
+        return filled
 
     def cancel(self, order_id: str) -> None:
         self.client.cancel_order(order_id=order_id)
