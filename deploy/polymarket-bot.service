@@ -1,0 +1,30 @@
+[Unit]
+Description=Polymarket Student List range-trading bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=bot
+Group=bot
+WorkingDirectory=/home/bot/polymarket-studenti-bot
+ExecStart=/home/bot/polymarket-studenti-bot/.venv/bin/python -m bot --config config.json --workdir .
+# Optional: secrets for live trading (PK, FUNDER, SIGNATURE_TYPE). The leading "-" keeps the
+# service starting while the file does not exist, as in paper mode.
+EnvironmentFile=-/home/bot/polymarket-studenti-bot/.env
+Environment=PYTHONUNBUFFERED=1
+
+# The bot cancels its own orders on SIGTERM; give it time before systemd kills it.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=always
+RestartSec=10
+# A clean exit (cutoff reached or STOP file) must not be restarted; crashes are.
+RestartPreventExitStatus=0
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

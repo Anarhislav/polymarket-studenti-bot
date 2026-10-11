@@ -52,6 +52,32 @@ while a real order would queue behind others at the same price.
 Replays historical trades through the same strategy the bot uses. Fees are not included
 (this market has them enabled, `politics_fees`).
 
+## Deploying to a DigitalOcean Droplet
+
+Create a Droplet: Ubuntu 24.04, the smallest Basic plan, SSH-key login, and a region where
+Polymarket is available to you. Then, as root on the Droplet:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Anarhislav/polymarket-studenti-bot/main/deploy/setup-droplet.sh | bash
+```
+
+`deploy/setup-droplet.sh` installs git and Python, enables clock sync and a firewall that allows
+SSH only, creates a `bot` user, clones this repo to `/home/bot/polymarket-studenti-bot`, runs the
+tests and starts the `polymarket-bot` systemd service. Running it again updates and restarts.
+
+| Task | Command (as root) |
+|---|---|
+| Follow the log | `journalctl -u polymarket-bot -f` |
+| Status | `systemctl status polymarket-bot` |
+| Stop (cancels the bot's orders, keeps the position) | `systemctl stop polymarket-bot` |
+| Deploy the latest `main` | `bash /home/bot/polymarket-studenti-bot/deploy/update.sh` |
+
+- systemd restarts the bot after a crash or a reboot, and it resumes from `state.json`. A clean
+  exit (cutoff reached, `STOP` file) is not restarted.
+- Run only one instance: stop the bot on any other machine before starting it on the Droplet.
+- For live trading, put the secrets in `/home/bot/polymarket-studenti-bot/.env`, owned by `bot`
+  with mode `600`. The service loads it if present; it is in `.gitignore` and never committed.
+
 ## Live trading
 
 Not included. It needs an adapter for `py-clob-client-v2` (1.2.0, the new CLOB V2 with pUSD)
