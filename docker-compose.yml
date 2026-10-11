@@ -1,0 +1,23 @@
+services:
+  bot:
+    build: .
+    image: polymarket-studenti-bot
+    container_name: polymarket-bot
+    # --live only trades real money when config.json also says "trading_mode": "live"; otherwise
+    # the bot refuses to start (exit 78). For paper trading, remove "--live".
+    command: ["-m", "bot", "--config", "/app/config.json", "--workdir", "/data", "--live"]
+    # Secrets come from .env on the host; they are not baked into the image.
+    env_file: .env
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./data:/data
+    # Restart after a crash, but not after a clean exit (cutoff reached, STOP file). A setup error
+    # (exit 78) is retried a few times and then left stopped; `docker compose logs` says why.
+    restart: on-failure:5
+    # The bot cancels its own orders on SIGTERM; give it time before Docker kills it.
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

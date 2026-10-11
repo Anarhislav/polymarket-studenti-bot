@@ -12,3 +12,4 @@ bot.log
 !.env.example
 state*.json
 ledger*.csv
+data/

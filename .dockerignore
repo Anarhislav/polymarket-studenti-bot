@@ -1,0 +1,18 @@
+# Secrets and runtime state never go into the image.
+.env
+.env.*
+!.env.example
+*.pem
+state*.json
+state*.tmp
+ledger*.csv
+STOP
+data/
+bot.log
+
+.git/
+.venv/
+**/__pycache__/
+.pytest_cache/
+tests/
+deploy/

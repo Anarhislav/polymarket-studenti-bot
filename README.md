@@ -74,7 +74,51 @@ slow or unreachable Telegram never delays trading.
 Replays historical trades through the same strategy the bot uses. Fees are not included
 (this market has them enabled, `politics_fees`).
 
-## Deploying to a DigitalOcean Droplet
+## Docker
+
+The image holds only the code; `config.json` is mounted read-only, secrets come from `.env` via
+`env_file`, and state, ledger and `STOP` live in `./data`.
+
+```bash
+docker compose up -d --build        # start (with --live, see below)
+docker compose logs -f              # follow the log
+docker compose stop                 # stop; the bot cancels its own orders first
+touch data/STOP                     # or stop it from inside
+docker compose run --rm bot -m bot.check --config /app/config.json   # read-only check
+```
+
+`docker-compose.yml` runs the bot with `--live`, so it trades real money only when `config.json`
+also says `"trading_mode": "live"`; otherwise it exits with 78 and Compose gives up after five
+tries. For paper trading in Docker, remove `--live` from `command`. Compose restarts the bot after
+a crash but not after a clean exit (cutoff, `STOP`).
+
+To move a running bot into Docker, stop it first and copy its `state.live.json` and
+`ledger.live.csv` into `./data`, so the container continues with the same position.
+
+### On a DigitalOcean Droplet
+
+As root on a fresh Ubuntu 24.04 Droplet (region where Polymarket is available, e.g. AMS3):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Anarhislav/polymarket-studenti-bot/main/deploy/setup-droplet-docker.sh | bash
+```
+
+It installs Docker from Ubuntu's repositories, enables clock sync and an SSH-only firewall,
+clones the repo to `/opt/polymarket-studenti-bot`, prepares `data/` and an empty `.env` (mode 600),
+and starts the container. It also disables the systemd deployment if one exists, so only one bot
+runs. Then copy your secrets and state, set `"trading_mode": "live"` in the server's
+`config.json`, and restart:
+
+```bash
+scp .env root@DROPLET_IP:/opt/polymarket-studenti-bot/.env
+scp state.live.json ledger.live.csv root@DROPLET_IP:/opt/polymarket-studenti-bot/data/
+ssh root@DROPLET_IP "cd /opt/polymarket-studenti-bot && chmod 600 .env && chown 10001:10001 data/* && docker compose up -d --force-recreate"
+```
+
+Update to the latest `main` with `bash /opt/polymarket-studenti-bot/deploy/update-docker.sh`; it
+keeps a local `config.json` change across the pull.
+
+## Deploying to a DigitalOcean Droplet without Docker (systemd)
 
 Create a Droplet: Ubuntu 24.04, the smallest Basic plan, SSH-key login, and a region where
 Polymarket is available to you. Then, as root on the Droplet:
