@@ -228,7 +228,7 @@ class Runner:
         before = st.cash
         delta = self.strategy.adopt_balance(balance)
         self._save()
-        if abs(delta) >= 1.0:
+        if abs(delta) >= 5.0:
             log.warning("wallet cash $%.2f vs tracked $%.2f: %s of $%.2f counted, budget now $%.2f",
                         balance, before, "deposit" if delta > 0 else "withdrawal", abs(delta), st.budget)
             self.notify.send(f"💵 {'Uplata' if delta > 0 else 'Isplata'} ${abs(delta):.2f} uključena u budžet "

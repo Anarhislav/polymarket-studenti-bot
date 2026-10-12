@@ -158,7 +158,7 @@ class Strategy:
         remaining = st.cash if st.mode == ACTIVE else 0.0
         st.buy_remaining_usd = [remaining * a for a in self.cfg.allocation]
 
-    def adopt_balance(self, balance: float, deposit_threshold: float = 1.0) -> float:
+    def adopt_balance(self, balance: float, deposit_threshold: float = 5.0) -> float:
         """Make the tracked cash match the wallet's cash balance; returns the change.
 
         A change of at least deposit_threshold is treated as a deposit or withdrawal and moves

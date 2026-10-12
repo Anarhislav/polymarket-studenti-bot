@@ -275,3 +275,27 @@ def test_runner_keeps_running_when_closed_order_is_unreadable(tmp_path, monkeypa
     runner.tick(0)
     assert "stale" not in [rec["id"] for rec in runner.orders.values()]
     assert len(runner.orders) == 4
+
+
+def test_buy_is_sized_from_real_cash_with_fee_reserve():
+    # The case from production: books said ~$103 after a sale, the wallet still showed $83.17.
+    client = FakeClient(collateral=83.17)
+    make(client).place_limit("YES", "BUY", 0.38, 272.14)
+    _, price, size, side = client.placed[-1]
+    cost = float(size) * 0.38 * (1 + 0.04 * 0.62)
+    assert (price, side) == ("0.38", "BUY")
+    assert float(size) < 272.14 and cost <= 83.17
+    assert float(size) == pytest.approx(213.36, abs=0.02)
+
+
+def test_buy_without_enough_cash_is_not_sent():
+    client = FakeClient(collateral=1.0)
+    with pytest.raises(OrderRejected, match="not_enough_balance"):
+        make(client).place_limit("YES", "BUY", 0.38, 50)
+    assert client.placed == []
+
+
+def test_buy_within_cash_is_unchanged():
+    client = FakeClient(collateral=100.0)
+    make(client).place_limit("YES", "BUY", 0.38, 26.31)
+    assert client.placed[-1][2] == "26.31"

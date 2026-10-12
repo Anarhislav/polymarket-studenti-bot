@@ -117,7 +117,8 @@ def main() -> None:
                 exchange = LiveExchange(client_from_env(), m["yes_token_id"], m["no_token_id"],
                                         m["condition_id"], stream=stream,
                                         status_poll_seconds=float(raw.get("status_poll_seconds", 2)),
-                                        min_order_shares=cfg.min_order_shares)
+                                        min_order_shares=cfg.min_order_shares,
+                                        taker_fee_rate=float(m.get("taker_fee_rate", 0.04)))
                 if budget_all:
                     cash = math.floor(exchange.collateral_balance() * 100) / 100
                     try:

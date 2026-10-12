@@ -76,9 +76,11 @@ def client_from_env():
 
 class LiveExchange(BookSource):
     def __init__(self, client, yes_token: str, no_token: str, condition_id: str, stream=None,
-                 status_poll_seconds: float = 2.0, min_order_shares: float = 5.0):
+                 status_poll_seconds: float = 2.0, min_order_shares: float = 5.0,
+                 taker_fee_rate: float = 0.04):
         super().__init__(yes_token, no_token, stream)
         self.client = client
+        self.taker_fee_rate = taker_fee_rate
         self.condition_id = condition_id
         self.status_poll = status_poll_seconds
         self.min_shares = min_order_shares
@@ -127,6 +129,12 @@ class LiveExchange(BookSource):
                 size = held
             if size < self.min_shares:
                 raise OrderRejected("too_small", f"only {held:.2f} {outcome} shares held")
+        else:
+            size = min(size, self.affordable_shares(price))
+            if size < self.min_shares:
+                raise OrderRejected("not_enough_balance",
+                                    f"wallet cash ${self.collateral_balance():.2f} buys under "
+                                    f"{self.min_shares:.0f} shares at {price:.2f}")
         size = _floor2(size)
         resp = self.client.place_limit_order(
             token_id=self.tokens[outcome], price=f"{price:.2f}", size=f"{size:.2f}",
@@ -251,6 +259,18 @@ class LiveExchange(BookSource):
         return float(sold), float(price)
 
     # --- balances -----------------------------------------------------------------------
+
+    def affordable_shares(self, price: float) -> float:
+        """Shares the wallet's cash buys at price, with the taker fee the exchange reserves.
+
+        Sized from the real balance rather than the bot's own books: proceeds of a sale only
+        arrive once it settles on chain, and fees make the books drift. A buy that crosses the
+        spread pays rate * p * (1 - p) per share, and the exchange holds that back up front.
+        """
+        cash = self.collateral_balance()
+        per_share = price * (1 + self.taker_fee_rate * (1 - price))
+        affordable = _floor2(cash * 0.999 / per_share)
+        return affordable
 
     def collateral_balance(self) -> float:
         return _units(self.client.get_balance_allowance(asset_type="COLLATERAL").balance)

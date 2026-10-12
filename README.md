@@ -20,7 +20,7 @@ goes to the new buy levels.
 
 - **Budget** (`budget_usd`): a dollar amount, or `"all"` to trade the wallet's whole pUSD cash
   balance (live only). With `"all"` the bot reads the balance at every start: a difference of
-  $1 or more is counted as a deposit or withdrawal (the profit baseline moves with it), a smaller
+  $5 or more is counted as a deposit or withdrawal (the profit baseline moves with it), a smaller
   one as fees.
 - Once the whole position is sold, the bot switches to the opposite phase with all its cash.
 - **Nearest-side entry** (`nearest_side_entry`, on in `config.json`): while the bot holds nothing
@@ -228,6 +228,9 @@ checks that the trading approvals are in place and that the pUSD balance covers 
 - Live state and fills go to `state.live.json` and `ledger.live.csv`, separate from paper mode.
 - Telegram messages start with `[LIVE]`.
 - Order status is refreshed with one request for all open orders every `status_poll_seconds`.
+- Buy orders are sized from the wallet's real pUSD balance, including the taker fee the exchange
+  reserves (`taker_fee_rate`, 0.04 for this market): sale proceeds only arrive once they settle, so
+  right after a sale the bot buys what it can and adds the rest when the money is there.
 - Sell orders are capped to the shares actually held, since fees can leave slightly fewer shares
   than were bought. A rejected order is logged, reported on Telegram once and retried after 30 s.
 - Fills are booked at the order's limit price; an order that crossed the spread when placed may
