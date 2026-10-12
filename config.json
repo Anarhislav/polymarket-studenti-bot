@@ -8,12 +8,12 @@
     "neg_risk": true
   },
   "strategy": {
-    "budget_usd": 100,
-    "allocation": [0.10, 0.15, 0.25, 0.50],
-    "yes_buy_levels": [0.37, 0.36, 0.35, 0.34],
-    "yes_sell_levels": [0.42, 0.43, 0.44, 0.45],
-    "no_buy_levels": [0.42, 0.43, 0.44, 0.45],
-    "no_sell_levels": [0.38, 0.37, 0.36, 0.35],
+    "budget_usd": "all",
+    "allocation": [1.0],
+    "yes_buy_levels": [0.38],
+    "yes_sell_levels": [0.42],
+    "no_buy_levels": [0.42],
+    "no_sell_levels": [0.38],
     "stop_yes_below": 0.0,
     "stop_yes_above": 1.0,
     "stop_wait_hours": 3,

@@ -20,3 +20,13 @@ def test_env_check_fails_without_live_keys(monkeypatch):
     r = Report()
     check_env(r)
     assert r.failed == 2
+
+
+def test_budget_all_uses_placeholder_or_override(tmp_path):
+    from bot.__main__ import PLACEHOLDER_BUDGET, load_config
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text('{"market": {}, "strategy": {"budget_usd": "all", "allocation": [1.0], '
+                        '"yes_buy_levels": [0.38], "yes_sell_levels": [0.42], "no_buy_levels": [0.42], '
+                        '"no_sell_levels": [0.38]}}')
+    assert load_config(cfg_file)[1].budget_usd == PLACEHOLDER_BUDGET
+    assert load_config(cfg_file, budget_override=81.41)[1].budget_usd == 81.41

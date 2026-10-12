@@ -7,6 +7,7 @@ ever signed or sent.
 import argparse
 import json
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,12 +19,21 @@ from .stream import MarketStream
 from .strategy import Config
 
 
-def load_config(path: Path) -> tuple:
+# budget_usd "all": live trading sizes the budget from the wallet's whole cash balance at start.
+BUDGET_ALL = "all"
+# Stand-in budget for "all" where there is no wallet to read (paper mode, backtest, check).
+PLACEHOLDER_BUDGET = 100.0
+
+
+def load_config(path: Path, budget_override: float = None) -> tuple:
     raw = json.loads(path.read_text())
     s = raw["strategy"]
     cutoff = s.get("stop_trading_at_utc")
+    budget = s["budget_usd"]
+    if budget == BUDGET_ALL:
+        budget = budget_override if budget_override is not None else PLACEHOLDER_BUDGET
     cfg = Config(
-        budget_usd=float(s["budget_usd"]),
+        budget_usd=float(budget),
         allocation=tuple(s.get("allocation", (0.10, 0.15, 0.25, 0.50))),
         yes_buy_levels=tuple(s.get("yes_buy_levels", (0.38, 0.37, 0.36, 0.35))),
         yes_sell_levels=tuple(s.get("yes_sell_levels", (0.42, 0.43, 0.44, 0.45))),
@@ -92,6 +102,7 @@ def main() -> None:
         config_error(f'live trading needs both --live and "trading_mode": "live" (config has "{mode}", '
                      f'--live {"given" if args.live else "not given"})')
     live = args.live
+    budget_all = raw["strategy"].get("budget_usd") == BUDGET_ALL
 
     stream = None
     if raw.get("market_data", "websocket") == "websocket":
@@ -107,16 +118,29 @@ def main() -> None:
                                         m["condition_id"], stream=stream,
                                         status_poll_seconds=float(raw.get("status_poll_seconds", 2)),
                                         min_order_shares=cfg.min_order_shares)
+                if budget_all:
+                    cash = math.floor(exchange.collateral_balance() * 100) / 100
+                    try:
+                        raw, cfg = load_config(Path(args.config), budget_override=cash)
+                        cfg.validate()
+                    except ValueError as err:
+                        config_error(f'budget_usd "all": wallet cash ${cash:.2f} is not enough: {err}')
                 balance = exchange.check_ready(cfg.budget_usd)
             except LiveSetupError as err:
                 config_error(f"not starting live trading: {err}")
             logging.warning("LIVE TRADING with real money: budget $%.2f, wallet balance $%.2f",
                             cfg.budget_usd, balance)
         else:
+            if budget_all:
+                logging.warning('budget_usd "all" has no wallet to read in paper mode; using $%.0f',
+                                PLACEHOLDER_BUDGET)
             exchange = PaperExchange(m["yes_token_id"], m["no_token_id"], stream=stream)
-        Runner(exchange, cfg, workdir, poll_seconds=float(raw.get("poll_seconds", 5)),
-               notifier=from_env(prefix="[LIVE] " if live else "[PAPER] "),
-               state_suffix=".live" if live else "").run()
+        runner = Runner(exchange, cfg, workdir, poll_seconds=float(raw.get("poll_seconds", 5)),
+                        notifier=from_env(prefix="[LIVE] " if live else "[PAPER] "),
+                        state_suffix=".live" if live else "")
+        if live and budget_all:
+            runner.adopt_balance(cfg.budget_usd)
+        runner.run()
     finally:
         if stream is not None:
             stream.stop()

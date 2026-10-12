@@ -240,3 +240,52 @@ def test_entry_threshold_at_midpoint(bid, ask, want):
     s = Strategy(Config(budget_usd=100, nearest_side_entry=True, entry_no_at_or_above=0.405))
     s.check_risk(Market(bid, ask), 0)
     assert s.st.side == want
+
+
+SINGLE = dict(allocation=(1.0,), yes_buy_levels=(0.38,), yes_sell_levels=(0.42,),
+              no_buy_levels=(0.42,), no_sell_levels=(0.38,))
+
+
+def test_single_level_round_trip_both_ways():
+    s = Strategy(Config(budget_usd=100, **SINGLE))
+    [buy] = s.desired_orders()
+    assert (buy.outcome, buy.price, buy.size) == (YES, 0.38, pytest.approx(263.15, abs=0.01))
+    s.on_fill(buy.key, buy.size, buy.price)
+    [sell] = [i for i in s.desired_orders() if i.side == "SELL"]
+    assert (sell.price, sell.size) == (0.42, pytest.approx(263.15, abs=0.01))
+    s.on_fill(sell.key, sell.size, sell.price)
+    assert s.st.side == NO and s.st.cash == pytest.approx(110.52, abs=0.01)
+    [no_buy] = s.desired_orders()
+    assert (no_buy.outcome, no_buy.price) == (NO, 0.58)
+    s.on_fill(no_buy.key, no_buy.size, no_buy.price)
+    [no_sell] = [i for i in s.desired_orders() if i.side == "SELL"]
+    assert no_sell.price == 0.62
+    s.on_fill(no_sell.key, no_sell.size, no_sell.price)
+    assert s.st.side == YES and s.st.cycles == 2 and s.st.cash == pytest.approx(118.14, abs=0.02)
+
+
+def test_four_level_state_migrates_to_single_level():
+    from bot.strategy import State
+    old = State(side=NO, mode="ACTIVE", cash=81.25, buy_remaining_usd=[0.0, 6.25, 25.0, 50.0], bought=32.67,
+                sold=[0.0, 0.0, 0.0, 0.0], shares=32.67, cost=18.75, realized_pnl=0.0, cycles=0)
+    s = Strategy(Config(budget_usd=81.25, **SINGLE), old)
+    assert s.st.budget == pytest.approx(100.0)
+    orders = {(i.side, i.price): i.size for i in s.desired_orders()}
+    assert orders[("BUY", 0.58)] == pytest.approx(81.25 / 0.58, abs=0.01)
+    assert orders[("SELL", 0.62)] == pytest.approx(32.67)
+    assert s.st.shares == 32.67 and s.st.cost == 18.75
+
+
+@pytest.mark.parametrize("balance,budget_after,remaining_after", [
+    (131.25, 150.0, 131.25),   # $50 deposit: counted in the budget and put to work
+    (81.00, 100.0, 81.00),     # 25 cents of fees: a loss, not a withdrawal
+])
+def test_adopt_balance(balance, budget_after, remaining_after):
+    from bot.strategy import State
+    st = State(side=NO, mode="ACTIVE", cash=81.25, buy_remaining_usd=[81.25], bought=32.67, sold=[0.0],
+               shares=32.67, cost=18.75, budget=100.0)
+    s = Strategy(Config(budget_usd=81.25, **SINGLE), st)
+    s.adopt_balance(balance)
+    assert s.st.cash == pytest.approx(balance)
+    assert s.st.budget == pytest.approx(budget_after)
+    assert s.st.buy_remaining_usd[0] == pytest.approx(remaining_after)

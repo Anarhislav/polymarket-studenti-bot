@@ -8,11 +8,20 @@ the real order book but never signs or sends an order.
 
 All levels are YES prices.
 
-| Phase | Buy (share of budget) | Sell |
+| Phase | Buy | Sell |
 |---|---|---|
-| YES | 37% (10%), 36% (15%), 35% (25%), 34% (50%) | 25% of the position at each of 42, 43, 44, 45% |
-| NO | when YES reaches 42% (10%), 43% (15%), 44% (25%), 45% (50%) | 25% each when YES falls to 38, 37, 36, 35% |
+| YES | everything at 38% | everything at 42% |
+| NO | everything when YES reaches 42% (NO at 58¢) | everything when YES falls to 38% (NO at 62¢) |
 
+Levels and the share of the budget per level are lists in `config.json` (`allocation`,
+`yes_buy_levels`, ...), so a multi-level ladder is still possible. A state saved with a different
+number of levels is carried over on start: the position and its cost stay, and all unspent cash
+goes to the new buy levels.
+
+- **Budget** (`budget_usd`): a dollar amount, or `"all"` to trade the wallet's whole pUSD cash
+  balance (live only). With `"all"` the bot reads the balance at every start: a difference of
+  $1 or more is counted as a deposit or withdrawal (the profit baseline moves with it), a smaller
+  one as fees.
 - Once the whole position is sold, the bot switches to the opposite phase with all its cash.
 - **Nearest-side entry** (`nearest_side_entry`, on in `config.json`): while the bot holds nothing
   in the current phase, it arms the ladder on the side the price is closer to. At YES ≥ 40.5% it

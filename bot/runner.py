@@ -222,6 +222,20 @@ class Runner:
             self._last_status = now
         self._last_snapshot = snapshot
 
+    def adopt_balance(self, balance: float) -> None:
+        """Use the wallet's whole cash balance (budget_usd "all"); see Strategy.adopt_balance."""
+        st = self.strategy.st
+        before = st.cash
+        delta = self.strategy.adopt_balance(balance)
+        self._save()
+        if abs(delta) >= 1.0:
+            log.warning("wallet cash $%.2f vs tracked $%.2f: %s of $%.2f counted, budget now $%.2f",
+                        balance, before, "deposit" if delta > 0 else "withdrawal", abs(delta), st.budget)
+            self.notify.send(f"💵 {'Uplata' if delta > 0 else 'Isplata'} ${abs(delta):.2f} uključena u budžet "
+                             f"(sada ${st.budget:.2f}), gotovina ${st.cash:.2f}")
+        elif delta:
+            log.info("wallet cash $%.2f vs tracked $%.2f: %+.2f booked as fees/rounding", balance, before, delta)
+
     def _write_status(self, now: float, running: bool) -> None:
         st = self.strategy.st
         market = self._last_market
@@ -231,7 +245,8 @@ class Runner:
             orders.append(dict(key=key, outcome=outcome, side=kind.upper(), price=rec["price"],
                                size=rec["size"], matched=rec["matched"]))
         status = dict(
-            updated_at=now, running=running, mode=self.mode, budget_usd=self.cfg.budget_usd,
+            updated_at=now, running=running, mode=self.mode,
+            budget_usd=st.budget if st.budget is not None else self.cfg.budget_usd,
             stop_trading_at=self.cfg.stop_trading_at or None,
             market=dict(yes_bid=market.yes_bid, yes_ask=market.yes_ask) if market else None,
             value=self.strategy.mark_to_market(market) if market else None,

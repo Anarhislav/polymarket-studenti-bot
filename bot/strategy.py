@@ -108,6 +108,9 @@ class State:
     breach_since: Optional[float] = None
     cycles: int = 0
     started_at: Optional[float] = None  # first start of this state (unix seconds)
+    # Money put in, the baseline for profit: the starting budget plus later deposits (minus
+    # withdrawals) picked up with budget_usd "all".
+    budget: Optional[float] = None
     leftover: dict = field(default_factory=dict)  # outcome -> shares below the exchange minimum
 
     def to_dict(self) -> dict:
@@ -131,9 +134,50 @@ class Strategy:
         config.validate()
         self.cfg = config
         if state is None:
-            state = State(cash=config.budget_usd)
+            state = State(cash=config.budget_usd, budget=config.budget_usd)
             self._start_phase(state, YES)
+        else:
+            if state.budget is None:
+                # Saved before the baseline was recorded: the money put in is what is held now
+                # (cash plus the position at cost) less the profit already realized.
+                state.budget = state.cash + state.cost - state.realized_pnl
+            if len(state.sold) != len(config.allocation):
+                self._migrate_ladder(state)
         self.st = state
+
+    def _migrate_ladder(self, st: State) -> None:
+        """Carry a state saved with a different number of ladder levels over to the current one.
+
+        The position, its cost and the realized profit stay as they are; what was already sold
+        in this phase is kept as one total, and all cash not yet spent goes to the buy levels in
+        the current allocation.
+        """
+        sold = sum(st.sold)
+        n = len(self.cfg.allocation)
+        st.sold = [sold] + [0.0] * (n - 1)
+        remaining = st.cash if st.mode == ACTIVE else 0.0
+        st.buy_remaining_usd = [remaining * a for a in self.cfg.allocation]
+
+    def adopt_balance(self, balance: float, deposit_threshold: float = 1.0) -> float:
+        """Make the tracked cash match the wallet's cash balance; returns the change.
+
+        A change of at least deposit_threshold is treated as a deposit or withdrawal and moves
+        the profit baseline with it; a smaller one is fee or rounding drift and stays a gain or
+        loss. New cash is added to this phase's unspent buy levels.
+        """
+        st = self.st
+        delta = balance - st.cash
+        if abs(delta) < 1e-9:
+            return 0.0
+        st.cash = balance
+        if abs(delta) >= deposit_threshold:
+            st.budget += delta
+        if st.mode == ACTIVE:
+            if delta > 0:
+                st.buy_remaining_usd = [r + delta * a for r, a in zip(st.buy_remaining_usd, self.cfg.allocation)]
+            else:
+                st.buy_remaining_usd = [min(r, st.cash) for r in st.buy_remaining_usd]
+        return delta
 
     # --- phase management -------------------------------------------------------------
 

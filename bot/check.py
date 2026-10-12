@@ -117,8 +117,11 @@ def check_account(r: Report, raw: dict, budget: float) -> None:
                 r.ok("approvals for this market are set")
                 r.warn(f"approvals this market does not use are missing: {'; '.join(unused)}")
         balance = ex.collateral_balance()
-        (r.ok if balance + 1e-9 >= budget else r.fail)(
-            f"pUSD balance ${balance:.2f}, budget_usd ${budget:.2f}")
+        if budget is None:
+            r.ok(f'pUSD balance ${balance:.2f} (budget_usd "all": the bot trades all of it)')
+        else:
+            (r.ok if balance + 1e-9 >= budget else r.fail)(
+                f"pUSD balance ${balance:.2f}, budget_usd ${budget:.2f}")
         r.ok(f"positions: YES {ex.token_balance('YES'):.2f}, NO {ex.token_balance('NO'):.2f}")
         open_orders = list(client.list_open_orders(market=m["condition_id"]).iter_items())
         (r.ok if not open_orders else r.warn)(f"{len(open_orders)} open order(s) on this market")
@@ -139,8 +142,10 @@ def main() -> None:
     check_env(r)
     check_geoblock(r)
     check_telegram(r)
-    check_account(r, raw, cfg.budget_usd)
-    print(f'5. config: trading_mode "{raw.get("trading_mode", "paper")}", budget_usd ${cfg.budget_usd:.2f}, '
+    budget_all = raw["strategy"].get("budget_usd") == "all"
+    check_account(r, raw, None if budget_all else cfg.budget_usd)
+    budget_text = "all" if budget_all else f"${cfg.budget_usd:.2f}"
+    print(f'5. config: trading_mode "{raw.get("trading_mode", "paper")}", budget_usd {budget_text}, '
           f'cutoff {raw["strategy"].get("stop_trading_at_utc")}')
     print("\nall checks passed" if not r.failed else f"\n{r.failed} check(s) failed")
     raise SystemExit(1 if r.failed else 0)
